@@ -75,7 +75,7 @@ if "!CODEC_CHOICE!"=="3" (
     set /p "BIT_CHOICE=Choice (1 or 2): "
 )
 
-:: Set Color Format based on Hardware/Software and Bit Depth
+:: Color Format logic
 if "!BIT_CHOICE!"=="2" (
     if "!USE_CUDA_FILTER!"=="1" (set "V_FORMAT=p010le") else (set "V_FORMAT=yuv420p10le")
 ) else (
@@ -84,9 +84,9 @@ if "!BIT_CHOICE!"=="2" (
 
 echo.
 set /p "PRESET=Enter preset (!P_HINT!): "
-set /p "CRF=Enter CRF/CQ value (e.g., 23): "
-set /p "MAXRATE=Enter maxrate (e.g., 1M): "
-set /p "BUFSIZE=Enter bufsize (e.g., 2M): "
+set /p "CRF=Enter CRF/CQ value (e.g., 23 - higher value = lower bitrate): "
+set /p "MAXRATE=Enter maxrate (e.g., 700k or 1M): "
+set /p "BUFSIZE=Enter bufsize (e.g., 1400k - double of maxrate is safe): "
 
 echo.
 echo Select Resolution: [1] 480p [2] 720p [3] 1080p [4] Original
@@ -97,19 +97,11 @@ if "!RES_CHOICE!"=="1" (set "W=720" & set "H=-2" & set "RES=480")
 if "!RES_CHOICE!"=="2" (set "W=1280" & set "H=-2" & set "RES=720")
 if "!RES_CHOICE!"=="3" (set "W=1920" & set "H=-2" & set "RES=1080")
 
-:: --- Filter Pipeline Logic ---
+:: --- Filter Pipeline ---
 if "!USE_CUDA_FILTER!"=="1" (
-    if "!RES_CHOICE!"=="4" (
-        set "VF_CMD=-vf hwupload_cuda,format=!V_FORMAT!"
-    ) else (
-        set "VF_CMD=-vf scale_cuda=!W!:!H!:format=!V_FORMAT!"
-    )
+    if "!RES_CHOICE!"=="4" (set "VF_CMD=-vf hwupload_cuda,format=!V_FORMAT!") else (set "VF_CMD=-vf scale_cuda=!W!:!H!:format=!V_FORMAT!")
 ) else (
-    if "!RES_CHOICE!"=="4" (
-        set "VF_CMD=-vf format=!V_FORMAT!"
-    ) else (
-        set "VF_CMD=-vf scale=!W!:!H!,format=!V_FORMAT!"
-    )
+    if "!RES_CHOICE!"=="4" (set "VF_CMD=-vf format=!V_FORMAT!") else (set "VF_CMD=-vf scale=!W!:!H!,format=!V_FORMAT!")
 )
 
 echo.
@@ -126,7 +118,7 @@ if "!MODE!"=="2" (call :process "!TARGET_FILE!") else (for %%i in (*.mp4 *.mkv *
 
 echo.
 echo ========================================
-echo          FINISHED ALL TASKS!
+echo           FINISHED ALL TASKS!
 echo ========================================
 pause
 exit /b
@@ -141,19 +133,27 @@ echo Processing: !input_file!
 set "SS_CMD="
 if not "!SEEK!"=="0" set SS_CMD=-ss !SEEK!
 
-:: Quality & RC Logic
+:: Quality & RC Logic (Modified for strict bitrate control)
 set "QUALITY_PARAM="
 set "AQ_PARAM="
 
-if "!CODEC_CHOICE!"=="1" (set "QUALITY_PARAM=-crf !CRF!")
-if "!CODEC_CHOICE!"=="2" (set "QUALITY_PARAM=-crf !CRF! -x265-params aq-mode=3")
-if "!CODEC_CHOICE!"=="3" (set "QUALITY_PARAM=-rc vbr -cq !CRF! -qmin !CRF! -qmax !CRF!" & set "AQ_PARAM=-spatial-aq 1")
-if "!CODEC_CHOICE!"=="4" (set "QUALITY_PARAM=-rc vbr -cq !CRF! -qmin !CRF! -qmax !CRF!" & set "AQ_PARAM=-spatial-aq 1")
+if "!CODEC_CHOICE!"=="1" (set "QUALITY_PARAM=-crf !CRF! -maxrate !MAXRATE! -bufsize !BUFSIZE!")
+if "!CODEC_CHOICE!"=="2" (set "QUALITY_PARAM=-crf !CRF! -maxrate !MAXRATE! -bufsize !BUFSIZE! -x265-params aq-mode=3")
 
-:: Final FFmpeg Execution
+:: NVENC Strict Bitrate Control Logic
+:: Here we use -b:v to set target and bind it with maxrate
+if "!CODEC_CHOICE!"=="3" (
+    set "QUALITY_PARAM=-rc vbr -cq !CRF! -b:v !MAXRATE! -maxrate !MAXRATE! -bufsize !BUFSIZE!"
+    set "AQ_PARAM=-spatial-aq 1"
+)
+if "!CODEC_CHOICE!"=="4" (
+    set "QUALITY_PARAM=-rc vbr -cq !CRF! -b:v !MAXRATE! -maxrate !MAXRATE! -bufsize !BUFSIZE!"
+    set "AQ_PARAM=-spatial-aq 1"
+)
+
+:: Execution
 ffmpeg -hide_banner !HW_ACCEL_CMD! !SS_CMD! -i "!input_file!" ^
 -c:v !VCODEC! -preset !PRESET! !QUALITY_PARAM! ^
--maxrate !MAXRATE! -bufsize !BUFSIZE! ^
 !VF_CMD! ^
 -rc-lookahead 32 !AQ_PARAM! ^
 !AUDIO_CH! -c:a aac -b:a 128k ^
